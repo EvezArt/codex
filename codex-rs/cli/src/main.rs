@@ -35,11 +35,13 @@ use supports_color::Stream;
 mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
+mod compile_cmd;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
+use crate::compile_cmd::CompileCommand;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -143,6 +145,9 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// Compile suggested patterns from resolved events.
+    Compile(CompileCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -768,6 +773,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let socket_path = cmd.socket_path;
             tokio::task::spawn_blocking(move || codex_stdio_to_uds::run(socket_path.as_path()))
                 .await??;
+        }
+        Some(Subcommand::Compile(cmd)) => {
+            cmd.run()?;
         }
         Some(Subcommand::Features(FeaturesCli { sub })) => match sub {
             FeaturesSubcommand::List => {
