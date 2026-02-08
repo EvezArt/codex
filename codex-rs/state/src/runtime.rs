@@ -1,3 +1,4 @@
+use crate::AuditAction;
 use crate::DB_ERROR_METRIC;
 use crate::LogEntry;
 use crate::LogQuery;
@@ -104,6 +105,49 @@ WHERE id = 1
         .fetch_one(self.pool.as_ref())
         .await?;
         crate::BackfillState::try_from_row(&row)
+    }
+
+    pub async fn ensure_covenant_version(&self, version: &str) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+INSERT OR IGNORE INTO covenants (version, created_at)
+VALUES (?, ?)
+            "#,
+        )
+        .bind(version)
+        .bind(Utc::now().timestamp())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    pub async fn insert_audit_action(&self, action: &AuditAction) -> anyhow::Result<()> {
+        self.ensure_covenant_version(action.covenant_version.as_str())
+            .await?;
+        sqlx::query(
+            r#"
+INSERT INTO audit_actions (
+    timestamp,
+    actor,
+    action_type,
+    scope,
+    covenant_version,
+    event_id,
+    intent_id
+)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(action.timestamp)
+        .bind(action.actor.as_str())
+        .bind(action.action_type.as_str())
+        .bind(action.scope.as_str())
+        .bind(action.covenant_version.as_str())
+        .bind(action.event_id.as_deref())
+        .bind(action.intent_id.as_deref())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
     }
 
     /// Mark rollout metadata backfill as running.

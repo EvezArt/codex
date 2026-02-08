@@ -10,6 +10,7 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::codex::TurnContext;
+use crate::covenant::CovenantAction;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
@@ -135,6 +136,82 @@ pub(crate) async fn execute_user_shell_command(
             }),
         )
         .await;
+
+    let capability = CovenantAction::InterventionUserShell.as_capability();
+    let allowed = match session
+        .audit_covenant_action(
+            turn_context.as_ref(),
+            CovenantAction::InterventionUserShell,
+            "user",
+            Some(call_id.as_str()),
+            Some(turn_context.sub_id.as_str()),
+        )
+        .await
+    {
+        Ok(allowed) => allowed,
+        Err(err) => {
+            let message = format!("covenant audit failed for {capability}: {err}");
+            session
+                .send_event(
+                    turn_context.as_ref(),
+                    EventMsg::Warning(crate::protocol::WarningEvent { message }),
+                )
+                .await;
+            false
+        }
+    };
+    if !allowed {
+        let message = format!("covenant scope disallows {capability}");
+        session
+            .send_event(
+                turn_context.as_ref(),
+                EventMsg::Warning(crate::protocol::WarningEvent {
+                    message: message.clone(),
+                }),
+            )
+            .await;
+        let exec_output = ExecToolCallOutput {
+            exit_code: -1,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(message.clone()),
+            aggregated_output: StreamOutput::new(message.clone()),
+            duration: Duration::ZERO,
+            timed_out: false,
+        };
+        session
+            .send_event(
+                turn_context.as_ref(),
+                EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                    call_id,
+                    process_id: None,
+                    turn_id: turn_context.sub_id.clone(),
+                    command: display_command.clone(),
+                    cwd: cwd.clone(),
+                    parsed_cmd: parsed_cmd.clone(),
+                    source: ExecCommandSource::UserShell,
+                    interaction_input: None,
+                    stdout: exec_output.stdout.text.clone(),
+                    stderr: exec_output.stderr.text.clone(),
+                    aggregated_output: exec_output.aggregated_output.text.clone(),
+                    exit_code: exec_output.exit_code,
+                    duration: exec_output.duration,
+                    formatted_output: format_exec_output_str(
+                        &exec_output,
+                        turn_context.truncation_policy,
+                    ),
+                }),
+            )
+            .await;
+        persist_user_shell_output(
+            &session,
+            turn_context.as_ref(),
+            &raw_command,
+            &exec_output,
+            mode,
+        )
+        .await;
+        return;
+    }
 
     let exec_env = ExecEnv {
         command: exec_command.clone(),

@@ -22,6 +22,7 @@ pub use runtime::StateRuntime;
 /// Most consumers should prefer [`StateRuntime`].
 pub use extract::apply_rollout_item;
 pub use model::Anchor;
+pub use model::AuditAction;
 pub use model::BackfillState;
 pub use model::BackfillStats;
 pub use model::BackfillStatus;

@@ -19,6 +19,8 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
+use crate::covenant::CovenantAction;
+use crate::covenant::load_covenant;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
@@ -71,6 +73,7 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_state::AuditAction;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
@@ -1722,6 +1725,45 @@ impl Session {
         ))
     }
 
+    pub(crate) async fn audit_covenant_action(
+        &self,
+        turn_context: &TurnContext,
+        action: CovenantAction,
+        actor: &str,
+        event_id: Option<&str>,
+        intent_id: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let scope = turn_context.session_source.to_string();
+        let capability = action.as_capability();
+        let (covenant_version, allowed) = match load_covenant(turn_context.cwd.as_path()).await {
+            Ok(covenant) => (
+                covenant.version.clone(),
+                covenant.allows(scope.as_str(), capability),
+            ),
+            Err(err) => {
+                warn!(
+                    "failed to load covenant.json from {}: {err}",
+                    turn_context.cwd.display()
+                );
+                ("missing".to_string(), false)
+            }
+        };
+        let audit_action = AuditAction {
+            timestamp: chrono::Utc::now().timestamp(),
+            actor: actor.to_string(),
+            action_type: capability.to_string(),
+            scope,
+            covenant_version: covenant_version.clone(),
+            event_id: event_id.map(ToString::to_string),
+            intent_id: intent_id.map(ToString::to_string),
+        };
+        let Some(state_db) = self.services.state_db.as_ref() else {
+            return Err(anyhow::anyhow!("state db unavailable for audit logging"));
+        };
+        state_db.insert_audit_action(&audit_action).await?;
+        Ok(allowed)
+    }
+
     pub(crate) async fn record_execpolicy_amendment_message(
         &self,
         sub_id: &str,
@@ -1767,6 +1809,32 @@ impl Session {
         reason: Option<String>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) -> ReviewDecision {
+        let capability = CovenantAction::ProposalExecCommand.as_capability();
+        let allowed = match self
+            .audit_covenant_action(
+                turn_context,
+                CovenantAction::ProposalExecCommand,
+                "agent",
+                Some(call_id.as_str()),
+                Some(turn_context.sub_id.as_str()),
+            )
+            .await
+        {
+            Ok(allowed) => allowed,
+            Err(err) => {
+                let message = format!("covenant audit failed for {capability}: {err}");
+                self.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                    .await;
+                return ReviewDecision::Denied;
+            }
+        };
+        if !allowed {
+            let message = format!("covenant scope disallows {capability}");
+            self.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                .await;
+            return ReviewDecision::Denied;
+        }
+
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
@@ -1807,6 +1875,36 @@ impl Session {
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
+        let capability = CovenantAction::ProposalApplyPatch.as_capability();
+        let allowed = match self
+            .audit_covenant_action(
+                turn_context,
+                CovenantAction::ProposalApplyPatch,
+                "agent",
+                Some(call_id.as_str()),
+                Some(turn_context.sub_id.as_str()),
+            )
+            .await
+        {
+            Ok(allowed) => allowed,
+            Err(err) => {
+                let message = format!("covenant audit failed for {capability}: {err}");
+                self.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                    .await;
+                let (tx_approve, rx_approve) = oneshot::channel();
+                let _ = tx_approve.send(ReviewDecision::Denied);
+                return rx_approve;
+            }
+        };
+        if !allowed {
+            let message = format!("covenant scope disallows {capability}");
+            self.send_event(turn_context, EventMsg::Warning(WarningEvent { message }))
+                .await;
+            let (tx_approve, rx_approve) = oneshot::channel();
+            let _ = tx_approve.send(ReviewDecision::Denied);
+            return rx_approve;
+        }
+
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
@@ -2767,6 +2865,7 @@ mod handlers {
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
 
+    use crate::covenant::CovenantAction;
     use crate::mcp::auth::compute_auth_statuses;
     use crate::mcp::collect_mcp_snapshot_from_manager;
     use crate::mcp::effective_mcp_servers;
@@ -2989,6 +3088,48 @@ mod handlers {
     /// Propagate a user's exec approval decision to the session.
     /// Also optionally applies an execpolicy amendment.
     pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+        let mut decision = decision;
+        let allowed = if let Some(turn_context) = sess.turn_context_for_sub_id(id.as_str()).await {
+            let capability = CovenantAction::InterventionExecApproval.as_capability();
+            match sess
+                .audit_covenant_action(
+                    &turn_context,
+                    CovenantAction::InterventionExecApproval,
+                    "user",
+                    Some(id.as_str()),
+                    Some(turn_context.sub_id.as_str()),
+                )
+                .await
+            {
+                Ok(allowed) => {
+                    if !allowed {
+                        let message = format!("covenant scope disallows {capability}");
+                        sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+                            .await;
+                    }
+                    allowed
+                }
+                Err(err) => {
+                    let message = format!("covenant audit failed for {capability}: {err}");
+                    sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+                        .await;
+                    false
+                }
+            }
+        } else {
+            warn!("no active turn context found for exec approval {id}");
+            false
+        };
+        if matches!(
+            decision,
+            ReviewDecision::Approved
+                | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                | ReviewDecision::ApprovedForSession
+        ) && !allowed
+        {
+            decision = ReviewDecision::Denied;
+        }
+
         if let ReviewDecision::ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
         } = &decision
@@ -3022,6 +3163,48 @@ mod handlers {
     }
 
     pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+        let mut decision = decision;
+        let allowed = if let Some(turn_context) = sess.turn_context_for_sub_id(id.as_str()).await {
+            let capability = CovenantAction::InterventionPatchApproval.as_capability();
+            match sess
+                .audit_covenant_action(
+                    &turn_context,
+                    CovenantAction::InterventionPatchApproval,
+                    "user",
+                    Some(id.as_str()),
+                    Some(turn_context.sub_id.as_str()),
+                )
+                .await
+            {
+                Ok(allowed) => {
+                    if !allowed {
+                        let message = format!("covenant scope disallows {capability}");
+                        sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+                            .await;
+                    }
+                    allowed
+                }
+                Err(err) => {
+                    let message = format!("covenant audit failed for {capability}: {err}");
+                    sess.send_event(&turn_context, EventMsg::Warning(WarningEvent { message }))
+                        .await;
+                    false
+                }
+            }
+        } else {
+            warn!("no active turn context found for patch approval {id}");
+            false
+        };
+        if matches!(
+            decision,
+            ReviewDecision::Approved
+                | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                | ReviewDecision::ApprovedForSession
+        ) && !allowed
+        {
+            decision = ReviewDecision::Denied;
+        }
+
         match decision {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;

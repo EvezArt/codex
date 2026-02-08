@@ -1,8 +1,10 @@
+mod audit;
 mod backfill_state;
 mod log;
 mod thread_memory;
 mod thread_metadata;
 
+pub use audit::AuditAction;
 pub use backfill_state::BackfillState;
 pub use backfill_state::BackfillStatus;
 pub use log::LogEntry;
