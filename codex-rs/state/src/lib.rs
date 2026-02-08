@@ -11,6 +11,8 @@ mod model;
 mod paths;
 mod runtime;
 
+pub use model::AuditAction;
+pub use model::CovenantRecord;
 pub use model::LogEntry;
 pub use model::LogQuery;
 pub use model::LogRow;

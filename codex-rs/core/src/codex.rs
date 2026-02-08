@@ -19,6 +19,8 @@ use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
 use crate::connectors;
+use crate::covenant;
+use crate::default_client::originator;
 use crate::exec_policy::ExecPolicyManager;
 use crate::features::FEATURES;
 use crate::features::Feature;
@@ -41,6 +43,7 @@ use crate::turn_metadata::build_turn_metadata_header;
 use crate::util::error_or_panic;
 use async_channel::Receiver;
 use async_channel::Sender;
+use chrono::Utc;
 use codex_protocol::ThreadId;
 use codex_protocol::approvals::ExecPolicyAmendment;
 use codex_protocol::config_types::ModeKind;
@@ -71,6 +74,8 @@ use codex_protocol::request_user_input::RequestUserInputArgs;
 use codex_protocol::request_user_input::RequestUserInputResponse;
 use codex_rmcp_client::ElicitationResponse;
 use codex_rmcp_client::OAuthCredentialsStoreMode;
+use codex_state::AuditAction;
+use codex_state::CovenantRecord;
 use futures::future::BoxFuture;
 use futures::prelude::*;
 use futures::stream::FuturesOrdered;
@@ -892,6 +897,7 @@ impl Session {
         // - initialize RolloutRecorder with new or resumed session info
         // - perform default shell discovery
         // - load history metadata
+        // - open audit database
         let rollout_fut = async {
             if config.ephemeral {
                 Ok::<_, anyhow::Error>((None, None))
@@ -908,6 +914,7 @@ impl Session {
             }
         };
 
+        let audit_db_fut = state_db::init_audit_db(&config, None);
         let history_meta_fut = crate::message_history::history_metadata(&config);
         let auth_manager_clone = Arc::clone(&auth_manager);
         let config_for_mcp = Arc::clone(&config);
@@ -927,7 +934,13 @@ impl Session {
             rollout_recorder_and_state_db,
             (history_log_id, history_entry_count),
             (auth, mcp_servers, auth_statuses),
-        ) = tokio::join!(rollout_fut, history_meta_fut, auth_and_mcp_fut);
+            audit_db_ctx,
+        ) = tokio::join!(
+            rollout_fut,
+            history_meta_fut,
+            auth_and_mcp_fut,
+            audit_db_fut
+        );
 
         let (rollout_recorder, state_db_ctx) = rollout_recorder_and_state_db.map_err(|e| {
             error!("failed to initialize rollout recorder: {e:#}");
@@ -1053,6 +1066,7 @@ impl Session {
             file_watcher,
             agent_control,
             state_db: state_db_ctx.clone(),
+            audit_db: audit_db_ctx.clone(),
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,
@@ -1143,6 +1157,10 @@ impl Session {
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.services.state_db.clone()
+    }
+
+    pub(crate) fn audit_db(&self) -> Option<state_db::StateDbHandle> {
+        self.services.audit_db.clone()
     }
 
     /// Ensure all rollout writes are durably flushed.
@@ -1767,6 +1785,87 @@ impl Session {
         reason: Option<String>,
         proposed_execpolicy_amendment: Option<ExecPolicyAmendment>,
     ) -> ReviewDecision {
+        let scope = covenant::SCOPE_EXEC;
+        let (covenant, covenant_path) = match covenant::load_from_cwd(&turn_context.cwd).await {
+            Ok(result) => result,
+            Err(err) => {
+                let message = format!("Covenant enforcement blocked exec proposal: {err}");
+                let warning = EventMsg::Warning(WarningEvent { message });
+                self.send_event(turn_context, warning).await;
+                return ReviewDecision::Denied;
+            }
+        };
+        let scopes_json = match covenant.scopes_json() {
+            Ok(scopes_json) => scopes_json,
+            Err(err) => {
+                let message = format!(
+                    "Covenant enforcement blocked exec proposal: failed to serialize scopes: {err}"
+                );
+                let warning = EventMsg::Warning(WarningEvent { message });
+                self.send_event(turn_context, warning).await;
+                return ReviewDecision::Denied;
+            }
+        };
+        let covenant_record = CovenantRecord {
+            version: covenant.version.clone(),
+            scopes_json,
+        };
+        let audit_db_ctx = self.audit_db();
+        if !state_db::upsert_covenant(
+            audit_db_ctx.as_deref(),
+            &covenant_record,
+            "request_command_approval",
+        )
+        .await
+        {
+            let message = format!(
+                "Covenant enforcement blocked exec proposal: failed to persist covenant version {}",
+                covenant.version
+            );
+            let warning = EventMsg::Warning(WarningEvent { message });
+            self.send_event(turn_context, warning).await;
+            return ReviewDecision::Denied;
+        }
+        let scope_allowed = covenant.allows_scope(scope);
+        let action_type = if scope_allowed {
+            "proposal"
+        } else {
+            "proposal_blocked"
+        };
+        let audit_action = AuditAction {
+            created_at: Utc::now().timestamp(),
+            actor: originator().value,
+            action_type: action_type.to_string(),
+            scope: scope.to_string(),
+            covenant_version: covenant.version.clone(),
+            event_id: Some(call_id.clone()),
+            intent_id: Some(turn_context.sub_id.clone()),
+        };
+        if !state_db::record_audit_action(
+            audit_db_ctx.as_deref(),
+            &audit_action,
+            "request_command_approval",
+        )
+        .await
+        {
+            let message = format!(
+                "Covenant enforcement blocked exec proposal: failed to write audit entry for covenant {}",
+                covenant.version
+            );
+            let warning = EventMsg::Warning(WarningEvent { message });
+            self.send_event(turn_context, warning).await;
+            return ReviewDecision::Denied;
+        }
+        if !scope_allowed {
+            let message = format!(
+                "Covenant enforcement blocked exec proposal: scope {scope} not allowed by {}",
+                covenant_path.display()
+            );
+            let warning = EventMsg::Warning(WarningEvent { message });
+            self.send_event(turn_context, warning).await;
+            return ReviewDecision::Denied;
+        }
+
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
@@ -1807,6 +1906,97 @@ impl Session {
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
+        let scope = covenant::SCOPE_APPLY_PATCH;
+        let (covenant, covenant_path) = match covenant::load_from_cwd(&turn_context.cwd).await {
+            Ok(result) => result,
+            Err(err) => {
+                let message = format!("Covenant enforcement blocked patch proposal: {err}");
+                let warning = EventMsg::Warning(WarningEvent { message });
+                self.send_event(turn_context, warning).await;
+                let (tx_approve, rx_approve) = oneshot::channel();
+                let _ = tx_approve.send(ReviewDecision::Denied);
+                return rx_approve;
+            }
+        };
+        let scopes_json = match covenant.scopes_json() {
+            Ok(scopes_json) => scopes_json,
+            Err(err) => {
+                let message = format!(
+                    "Covenant enforcement blocked patch proposal: failed to serialize scopes: {err}"
+                );
+                let warning = EventMsg::Warning(WarningEvent { message });
+                self.send_event(turn_context, warning).await;
+                let (tx_approve, rx_approve) = oneshot::channel();
+                let _ = tx_approve.send(ReviewDecision::Denied);
+                return rx_approve;
+            }
+        };
+        let covenant_record = CovenantRecord {
+            version: covenant.version.clone(),
+            scopes_json,
+        };
+        let audit_db_ctx = self.audit_db();
+        if !state_db::upsert_covenant(
+            audit_db_ctx.as_deref(),
+            &covenant_record,
+            "request_patch_approval",
+        )
+        .await
+        {
+            let message = format!(
+                "Covenant enforcement blocked patch proposal: failed to persist covenant version {}",
+                covenant.version
+            );
+            let warning = EventMsg::Warning(WarningEvent { message });
+            self.send_event(turn_context, warning).await;
+            let (tx_approve, rx_approve) = oneshot::channel();
+            let _ = tx_approve.send(ReviewDecision::Denied);
+            return rx_approve;
+        }
+        let scope_allowed = covenant.allows_scope(scope);
+        let action_type = if scope_allowed {
+            "proposal"
+        } else {
+            "proposal_blocked"
+        };
+        let audit_action = AuditAction {
+            created_at: Utc::now().timestamp(),
+            actor: originator().value,
+            action_type: action_type.to_string(),
+            scope: scope.to_string(),
+            covenant_version: covenant.version.clone(),
+            event_id: Some(call_id.clone()),
+            intent_id: Some(turn_context.sub_id.clone()),
+        };
+        if !state_db::record_audit_action(
+            audit_db_ctx.as_deref(),
+            &audit_action,
+            "request_patch_approval",
+        )
+        .await
+        {
+            let message = format!(
+                "Covenant enforcement blocked patch proposal: failed to write audit entry for covenant {}",
+                covenant.version
+            );
+            let warning = EventMsg::Warning(WarningEvent { message });
+            self.send_event(turn_context, warning).await;
+            let (tx_approve, rx_approve) = oneshot::channel();
+            let _ = tx_approve.send(ReviewDecision::Denied);
+            return rx_approve;
+        }
+        if !scope_allowed {
+            let message = format!(
+                "Covenant enforcement blocked patch proposal: scope {scope} not allowed by {}",
+                covenant_path.display()
+            );
+            let warning = EventMsg::Warning(WarningEvent { message });
+            self.send_event(turn_context, warning).await;
+            let (tx_approve, rx_approve) = oneshot::channel();
+            let _ = tx_approve.send(ReviewDecision::Denied);
+            return rx_approve;
+        }
+
         let sub_id = turn_context.sub_id.clone();
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
@@ -2800,6 +2990,10 @@ mod handlers {
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
+    use crate::covenant;
+    use crate::default_client::originator;
+    use crate::state_db;
+    use chrono::Utc;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
@@ -2808,6 +3002,8 @@ mod handlers {
     use codex_protocol::user_input::UserInput;
     use codex_rmcp_client::ElicitationAction;
     use codex_rmcp_client::ElicitationResponse;
+    use codex_state::AuditAction;
+    use codex_state::CovenantRecord;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::info;
@@ -2989,9 +3185,105 @@ mod handlers {
     /// Propagate a user's exec approval decision to the session.
     /// Also optionally applies an execpolicy amendment.
     pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
+        let mut effective_decision = decision.clone();
+        let (turn_context, covenant_cwd) = match sess.turn_context_for_sub_id(&id).await {
+            Some(context) => (Some(context.clone()), context.cwd.clone()),
+            None => {
+                let cwd = {
+                    let state = sess.state.lock().await;
+                    state.session_configuration.cwd.clone()
+                };
+                (None, cwd)
+            }
+        };
+        let send_warning = |message: String| async {
+            let warning = EventMsg::Warning(WarningEvent { message });
+            if let Some(context) = turn_context.as_ref() {
+                sess.send_event(context, warning).await;
+            } else {
+                sess.send_event_raw(Event {
+                    id: id.clone(),
+                    msg: warning,
+                })
+                .await;
+            }
+        };
+        let scope = covenant::SCOPE_EXEC;
+        let (covenant, covenant_path) = match covenant::load_from_cwd(&covenant_cwd).await {
+            Ok(result) => result,
+            Err(err) => {
+                send_warning(format!(
+                    "Covenant enforcement blocked exec intervention: {err}"
+                ))
+                .await;
+                effective_decision = deny_or_abort(&decision);
+                sess.notify_approval(&id, effective_decision).await;
+                return;
+            }
+        };
+        let scopes_json = match covenant.scopes_json() {
+            Ok(scopes_json) => scopes_json,
+            Err(err) => {
+                send_warning(format!(
+                    "Covenant enforcement blocked exec intervention: failed to serialize scopes: {err}"
+                ))
+                .await;
+                effective_decision = deny_or_abort(&decision);
+                sess.notify_approval(&id, effective_decision).await;
+                return;
+            }
+        };
+        let covenant_record = CovenantRecord {
+            version: covenant.version.clone(),
+            scopes_json,
+        };
+        let audit_db_ctx = sess.audit_db();
+        if !state_db::upsert_covenant(audit_db_ctx.as_deref(), &covenant_record, "exec_approval")
+            .await
+        {
+            send_warning(format!(
+                "Covenant enforcement blocked exec intervention: failed to persist covenant version {}",
+                covenant.version
+            ))
+            .await;
+            effective_decision = deny_or_abort(&decision);
+            sess.notify_approval(&id, effective_decision).await;
+            return;
+        }
+        let scope_allowed = covenant.allows_scope(scope);
+        let mut action_type = intervention_action_type(&decision);
+        if !scope_allowed {
+            action_type = "intervention_blocked";
+            send_warning(format!(
+                "Covenant enforcement blocked exec intervention: scope {scope} not allowed by {}",
+                covenant_path.display()
+            ))
+            .await;
+            effective_decision = ReviewDecision::Denied;
+        }
+        let audit_action = AuditAction {
+            created_at: Utc::now().timestamp(),
+            actor: originator().value,
+            action_type: action_type.to_string(),
+            scope: scope.to_string(),
+            covenant_version: covenant.version.clone(),
+            event_id: Some(id.clone()),
+            intent_id: None,
+        };
+        if !state_db::record_audit_action(audit_db_ctx.as_deref(), &audit_action, "exec_approval")
+            .await
+        {
+            send_warning(format!(
+                "Covenant enforcement blocked exec intervention: failed to write audit entry for covenant {}",
+                covenant.version
+            ))
+            .await;
+            effective_decision = deny_or_abort(&decision);
+        }
+
         if let ReviewDecision::ApprovedExecpolicyAmendment {
             proposed_execpolicy_amendment,
-        } = &decision
+        } = &effective_decision
         {
             match sess
                 .persist_execpolicy_amendment(proposed_execpolicy_amendment)
@@ -3013,7 +3305,7 @@ mod handlers {
                 }
             }
         }
-        match decision {
+        match effective_decision {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;
             }
@@ -3022,11 +3314,126 @@ mod handlers {
     }
 
     pub async fn patch_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {
-        match decision {
+        let mut effective_decision = decision.clone();
+        let (turn_context, covenant_cwd) = match sess.turn_context_for_sub_id(&id).await {
+            Some(context) => (Some(context.clone()), context.cwd.clone()),
+            None => {
+                let cwd = {
+                    let state = sess.state.lock().await;
+                    state.session_configuration.cwd.clone()
+                };
+                (None, cwd)
+            }
+        };
+        let send_warning = |message: String| async {
+            let warning = EventMsg::Warning(WarningEvent { message });
+            if let Some(context) = turn_context.as_ref() {
+                sess.send_event(context, warning).await;
+            } else {
+                sess.send_event_raw(Event {
+                    id: id.clone(),
+                    msg: warning,
+                })
+                .await;
+            }
+        };
+        let scope = covenant::SCOPE_APPLY_PATCH;
+        let (covenant, covenant_path) = match covenant::load_from_cwd(&covenant_cwd).await {
+            Ok(result) => result,
+            Err(err) => {
+                send_warning(format!(
+                    "Covenant enforcement blocked patch intervention: {err}"
+                ))
+                .await;
+                effective_decision = deny_or_abort(&decision);
+                sess.notify_approval(&id, effective_decision).await;
+                return;
+            }
+        };
+        let scopes_json = match covenant.scopes_json() {
+            Ok(scopes_json) => scopes_json,
+            Err(err) => {
+                send_warning(format!(
+                    "Covenant enforcement blocked patch intervention: failed to serialize scopes: {err}"
+                ))
+                .await;
+                effective_decision = deny_or_abort(&decision);
+                sess.notify_approval(&id, effective_decision).await;
+                return;
+            }
+        };
+        let covenant_record = CovenantRecord {
+            version: covenant.version.clone(),
+            scopes_json,
+        };
+        let audit_db_ctx = sess.audit_db();
+        if !state_db::upsert_covenant(audit_db_ctx.as_deref(), &covenant_record, "patch_approval")
+            .await
+        {
+            send_warning(format!(
+                "Covenant enforcement blocked patch intervention: failed to persist covenant version {}",
+                covenant.version
+            ))
+            .await;
+            effective_decision = deny_or_abort(&decision);
+            sess.notify_approval(&id, effective_decision).await;
+            return;
+        }
+        let scope_allowed = covenant.allows_scope(scope);
+        let mut action_type = intervention_action_type(&decision);
+        if !scope_allowed {
+            action_type = "intervention_blocked";
+            send_warning(format!(
+                "Covenant enforcement blocked patch intervention: scope {scope} not allowed by {}",
+                covenant_path.display()
+            ))
+            .await;
+            effective_decision = ReviewDecision::Denied;
+        }
+        let audit_action = AuditAction {
+            created_at: Utc::now().timestamp(),
+            actor: originator().value,
+            action_type: action_type.to_string(),
+            scope: scope.to_string(),
+            covenant_version: covenant.version.clone(),
+            event_id: Some(id.clone()),
+            intent_id: None,
+        };
+        if !state_db::record_audit_action(audit_db_ctx.as_deref(), &audit_action, "patch_approval")
+            .await
+        {
+            send_warning(format!(
+                "Covenant enforcement blocked patch intervention: failed to write audit entry for covenant {}",
+                covenant.version
+            ))
+            .await;
+            effective_decision = deny_or_abort(&decision);
+        }
+
+        match effective_decision {
             ReviewDecision::Abort => {
                 sess.interrupt_task().await;
             }
             other => sess.notify_approval(&id, other).await,
+        }
+    }
+
+    fn intervention_action_type(decision: &ReviewDecision) -> &'static str {
+        match decision {
+            ReviewDecision::Approved => "intervention_approved",
+            ReviewDecision::ApprovedExecpolicyAmendment { .. } => {
+                "intervention_approved_execpolicy"
+            }
+            ReviewDecision::ApprovedForSession => "intervention_approved_for_session",
+            ReviewDecision::Denied => "intervention_denied",
+            ReviewDecision::Abort => "intervention_abort",
+        }
+    }
+
+    fn deny_or_abort(decision: &ReviewDecision) -> ReviewDecision {
+        match decision {
+            ReviewDecision::Abort => ReviewDecision::Abort,
+            _ => ReviewDecision::Denied,
         }
     }
 
@@ -5787,6 +6194,7 @@ mod tests {
             file_watcher,
             agent_control,
             state_db: None,
+            audit_db: None,
             model_client: ModelClient::new(
                 Some(auth_manager.clone()),
                 conversation_id,
@@ -5917,6 +6325,7 @@ mod tests {
             file_watcher,
             agent_control,
             state_db: None,
+            audit_db: None,
             model_client: ModelClient::new(
                 Some(Arc::clone(&auth_manager)),
                 conversation_id,

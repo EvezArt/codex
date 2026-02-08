@@ -12,6 +12,8 @@ use codex_protocol::ThreadId;
 use codex_protocol::dynamic_tools::DynamicToolSpec;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::SessionSource;
+use codex_state::AuditAction;
+use codex_state::CovenantRecord;
 use codex_state::DB_METRIC_COMPARE_ERROR;
 pub use codex_state::LogEntry;
 use codex_state::STATE_DB_VERSION;
@@ -70,6 +72,19 @@ pub(crate) async fn init_if_enabled(
     require_backfill_complete(runtime, config.codex_home.as_path()).await
 }
 
+pub(crate) async fn init_audit_db(
+    config: &Config,
+    otel: Option<&OtelManager>,
+) -> Option<StateDbHandle> {
+    codex_state::StateRuntime::init(
+        config.codex_home.clone(),
+        config.model_provider_id.clone(),
+        otel.cloned(),
+    )
+    .await
+    .ok()
+}
+
 /// Get the DB if the feature is enabled and the DB exists.
 pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option<StateDbHandle> {
     let state_path = codex_state::state_db_path(config.codex_home.as_path());
@@ -86,6 +101,42 @@ pub async fn get_state_db(config: &Config, otel: Option<&OtelManager>) -> Option
     .await
     .ok()?;
     require_backfill_complete(runtime, config.codex_home.as_path()).await
+}
+
+pub async fn upsert_covenant(
+    context: Option<&codex_state::StateRuntime>,
+    covenant: &CovenantRecord,
+    stage: &str,
+) -> bool {
+    let ctx = match context {
+        Some(ctx) => ctx,
+        None => return false,
+    };
+    match ctx.upsert_covenant(covenant).await {
+        Ok(()) => true,
+        Err(err) => {
+            warn!("state db upsert_covenant failed during {stage}: {err}");
+            false
+        }
+    }
+}
+
+pub async fn record_audit_action(
+    context: Option<&codex_state::StateRuntime>,
+    action: &AuditAction,
+    stage: &str,
+) -> bool {
+    let ctx = match context {
+        Some(ctx) => ctx,
+        None => return false,
+    };
+    match ctx.insert_audit_action(action).await {
+        Ok(()) => true,
+        Err(err) => {
+            warn!("state db insert_audit_action failed during {stage}: {err}");
+            false
+        }
+    }
 }
 
 /// Open the state runtime when the SQLite file exists, without feature gating.
