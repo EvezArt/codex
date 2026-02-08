@@ -38,8 +38,11 @@ mod desktop_app;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
+mod patterns_match;
 
 use crate::mcp_cmd::McpCli;
+use crate::patterns_match::PatternsMatchCommand;
+use crate::patterns_match::run_patterns_match;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -122,6 +125,10 @@ enum Subcommand {
     /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
     #[clap(visible_alias = "a")]
     Apply(ApplyCommand),
+
+    /// Rank stored patterns against an event.
+    #[clap(name = "patterns-match")]
+    PatternsMatch(PatternsMatchCommand),
 
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
@@ -759,6 +766,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             run_apply_command(apply_cli, None).await?;
+        }
+        Some(Subcommand::PatternsMatch(cmd)) => {
+            run_patterns_match(cmd)?;
         }
         Some(Subcommand::ResponsesApiProxy(args)) => {
             tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
