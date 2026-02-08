@@ -49,6 +49,46 @@ Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your 
 
 You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
 
+## HandshakeOS examples
+
+The HandshakeOS CLI runs without direct hardware access; all inputs are user-provided data captured by the CLI or supplied as arguments in these examples.
+
+### Initialize a workspace
+
+```shell
+handshakeos-e init
+```
+
+### Capture an observation with hypotheses
+
+```shell
+handshakeos-e capture \
+  --intent "Route audio to Bluetooth" \
+  --observation "Pressed play → audio routed to Bluetooth" \
+  --hypothesis "Device auto-reconnects to last headset" --mixture 0.44 \
+  --hypothesis "Media app forces BT output on play" --mixture 0.22 \
+  --hypothesis "OS audio route preference set to Bluetooth" --mixture 0.17 \
+  --hypothesis "Car mode profile activated" --mixture 0.09 \
+  --hypothesis "Bluetooth audio sink is only available output" --mixture 0.08 \
+  --test-result "Toggled Bluetooth off: audio stayed on speaker" \
+  --evidence "trace://session/2025-02-14T09:31:04Z#step-3" \
+  --outcome "Route preference is set to Bluetooth on play, but disabling Bluetooth falls back to speaker" \
+  --outcome-evidence "trace://session/2025-02-14T09:31:04Z#step-4"
+```
+
+### Match patterns for a similar query
+
+```shell
+handshakeos-e patterns-match "Audio routes to Bluetooth when I hit play"
+```
+
+```text
+Ranked matches:
+1. Route audio to Bluetooth (score: 0.92)
+2. Audio automatically switches to car stereo (score: 0.81)
+3. Bluetooth headset reconnects on media start (score: 0.76)
+```
+
 ## Docs
 
 - [**Codex Documentation**](https://developers.openai.com/codex)
