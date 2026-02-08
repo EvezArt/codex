@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "evez-core"
+version = "0.1.0"
+description = "Owner-imprinted CLI and SQLite schema for EVEZ"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [
+  { name = "EVEZ666 (Steven Vearl Crawford‑Maggard)" },
+]
+maintainers = [
+  { name = "EVEZ666 (Steven Vearl Crawford‑Maggard)" },
+]
+keywords = ["cli", "sqlite", "evez", "imprint"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+[project.scripts]
+evez = "evez.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["evez*"]
