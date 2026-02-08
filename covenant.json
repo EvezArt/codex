@@ -1,0 +1,17 @@
+{
+  "version": "1.0",
+  "scopes": [
+    {
+      "name": "exec",
+      "capabilities": [
+        "run_commands"
+      ]
+    },
+    {
+      "name": "apply_patch",
+      "capabilities": [
+        "modify_workspace"
+      ]
+    }
+  ]
+}

@@ -1,3 +1,5 @@
+use crate::AuditAction;
+use crate::CovenantRecord;
 use crate::DB_ERROR_METRIC;
 use crate::LogEntry;
 use crate::LogQuery;
@@ -38,7 +40,7 @@ use std::time::Duration;
 use tracing::warn;
 
 pub const STATE_DB_FILENAME: &str = "state";
-pub const STATE_DB_VERSION: u32 = 3;
+pub const STATE_DB_VERSION: u32 = 4;
 
 const METRIC_DB_INIT: &str = "codex.db.init";
 
@@ -104,6 +106,53 @@ WHERE id = 1
         .fetch_one(self.pool.as_ref())
         .await?;
         crate::BackfillState::try_from_row(&row)
+    }
+
+    pub async fn upsert_covenant(&self, covenant: &CovenantRecord) -> anyhow::Result<()> {
+        let now = Utc::now().timestamp();
+        sqlx::query(
+            r#"
+INSERT INTO covenants (version, scopes_json, created_at, updated_at)
+VALUES (?, ?, ?, ?)
+ON CONFLICT(version) DO UPDATE SET
+    scopes_json = excluded.scopes_json,
+    updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(&covenant.version)
+        .bind(&covenant.scopes_json)
+        .bind(now)
+        .bind(now)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
+    }
+
+    pub async fn insert_audit_action(&self, action: &AuditAction) -> anyhow::Result<()> {
+        sqlx::query(
+            r#"
+INSERT INTO audit_actions (
+    created_at,
+    actor,
+    action_type,
+    scope,
+    covenant_version,
+    event_id,
+    intent_id
+)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(action.created_at)
+        .bind(&action.actor)
+        .bind(&action.action_type)
+        .bind(&action.scope)
+        .bind(&action.covenant_version)
+        .bind(&action.event_id)
+        .bind(&action.intent_id)
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(())
     }
 
     /// Mark rollout metadata backfill as running.
