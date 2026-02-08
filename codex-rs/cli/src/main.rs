@@ -36,10 +36,12 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+mod stats;
 #[cfg(not(windows))]
 mod wsl_paths;
 
 use crate::mcp_cmd::McpCli;
+use crate::stats::StatsCommand;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -143,6 +145,9 @@ enum Subcommand {
 
     /// Inspect feature flags.
     Features(FeaturesCli),
+
+    /// Compute stats from rollout JSONL files.
+    Stats(StatsCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -818,6 +823,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 disable_feature_in_config(&interactive, &feature).await?;
             }
         },
+        Some(Subcommand::Stats(cmd)) => {
+            stats::run_stats(cmd)?;
+        }
     }
 
     Ok(())
