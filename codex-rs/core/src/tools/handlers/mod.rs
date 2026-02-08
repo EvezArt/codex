@@ -1,4 +1,5 @@
 pub mod apply_patch;
+mod capture;
 pub(crate) mod collab;
 mod dynamic;
 mod get_memory;
@@ -19,6 +20,8 @@ use serde::Deserialize;
 
 use crate::function_tool::FunctionCallError;
 pub use apply_patch::ApplyPatchHandler;
+pub use capture::CaptureHandler;
+pub(crate) use capture::capture_tool_description;
 pub use collab::CollabHandler;
 pub use dynamic::DynamicToolHandler;
 pub use get_memory::GetMemoryHandler;
@@ -30,6 +33,7 @@ pub use plan::PlanHandler;
 pub use read_file::ReadFileHandler;
 pub use request_user_input::RequestUserInputHandler;
 pub(crate) use request_user_input::request_user_input_tool_description;
+pub(crate) use request_user_input::request_user_input_unavailable_message;
 pub use shell::ShellCommandHandler;
 pub use shell::ShellHandler;
 pub use test_sync::TestSyncHandler;

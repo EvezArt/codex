@@ -6,6 +6,7 @@ use crate::features::Features;
 use crate::tools::handlers::PLAN_TOOL;
 use crate::tools::handlers::apply_patch::create_apply_patch_freeform_tool;
 use crate::tools::handlers::apply_patch::create_apply_patch_json_tool;
+use crate::tools::handlers::capture_tool_description;
 use crate::tools::handlers::collab::DEFAULT_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MAX_WAIT_TIMEOUT_MS;
 use crate::tools::handlers::collab::MIN_WAIT_TIMEOUT_MS;
@@ -637,6 +638,19 @@ fn create_request_user_input_tool() -> ToolSpec {
     })
 }
 
+fn create_capture_tool() -> ToolSpec {
+    ToolSpec::Function(ResponsesApiTool {
+        name: "capture".to_string(),
+        description: capture_tool_description(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties: BTreeMap::new(),
+            required: None,
+            additional_properties: Some(false.into()),
+        },
+    })
+}
+
 fn create_get_memory_tool() -> ToolSpec {
     let properties = BTreeMap::from([(
         "memory_id".to_string(),
@@ -1251,6 +1265,7 @@ pub(crate) fn build_specs(
     dynamic_tools: &[DynamicToolSpec],
 ) -> ToolRegistryBuilder {
     use crate::tools::handlers::ApplyPatchHandler;
+    use crate::tools::handlers::CaptureHandler;
     use crate::tools::handlers::CollabHandler;
     use crate::tools::handlers::DynamicToolHandler;
     use crate::tools::handlers::GetMemoryHandler;
@@ -1281,6 +1296,7 @@ pub(crate) fn build_specs(
     let mcp_resource_handler = Arc::new(McpResourceHandler);
     let shell_command_handler = Arc::new(ShellCommandHandler);
     let request_user_input_handler = Arc::new(RequestUserInputHandler);
+    let capture_handler = Arc::new(CaptureHandler);
 
     match &config.shell_type {
         ConfigShellToolType::Default => {
@@ -1333,6 +1349,8 @@ pub(crate) fn build_specs(
     if config.collaboration_modes_tools {
         builder.push_spec(create_request_user_input_tool());
         builder.register_handler("request_user_input", request_user_input_handler);
+        builder.push_spec(create_capture_tool());
+        builder.register_handler("capture", capture_handler);
     }
 
     if config.memory_tools {
@@ -1631,6 +1649,7 @@ mod tests {
             create_read_mcp_resource_tool(),
             PLAN_TOOL.clone(),
             create_request_user_input_tool(),
+            create_capture_tool(),
             create_apply_patch_freeform_tool(),
             ToolSpec::WebSearch {
                 external_web_access: Some(true),
@@ -1690,6 +1709,10 @@ mod tests {
             !tools.iter().any(|t| t.spec.name() == "request_user_input"),
             "request_user_input should be disabled when collaboration_modes feature is off"
         );
+        assert!(
+            !tools.iter().any(|t| t.spec.name() == "capture"),
+            "capture should be disabled when collaboration_modes feature is off"
+        );
 
         features.enable(Feature::CollaborationModes);
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
@@ -1698,7 +1721,7 @@ mod tests {
             web_search_mode: Some(WebSearchMode::Cached),
         });
         let (tools, _) = build_specs(&tools_config, None, &[]).build();
-        assert_contains_tool_names(&tools, &["request_user_input"]);
+        assert_contains_tool_names(&tools, &["request_user_input", "capture"]);
     }
 
     #[test]
@@ -1821,6 +1844,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "capture",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1843,6 +1867,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "capture",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1867,6 +1892,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "capture",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1891,6 +1917,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "capture",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1913,6 +1940,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "capture",
                 "web_search",
                 "view_image",
             ],
@@ -1934,6 +1962,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "capture",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -1956,6 +1985,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "capture",
                 "web_search",
                 "view_image",
             ],
@@ -1977,6 +2007,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "capture",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -2000,6 +2031,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "capture",
                 "apply_patch",
                 "web_search",
                 "view_image",
@@ -2024,6 +2056,7 @@ mod tests {
                 "read_mcp_resource",
                 "update_plan",
                 "request_user_input",
+                "capture",
                 "web_search",
                 "view_image",
             ],
