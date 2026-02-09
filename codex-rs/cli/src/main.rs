@@ -33,12 +33,14 @@ use supports_color::Stream;
 
 #[cfg(target_os = "macos")]
 mod app_cmd;
+mod covenant;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
+use crate::covenant::CovenantCommand;
 use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
@@ -101,6 +103,9 @@ enum Subcommand {
 
     /// [experimental] Run the app server or related tooling.
     AppServer(AppServerCommand),
+
+    /// Manage covenant events, patterns, and audit log.
+    Covenant(CovenantCommand),
 
     /// Launch the Codex desktop app (downloads the macOS installer if missing).
     #[cfg(target_os = "macos")]
@@ -624,6 +629,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 )?;
             }
         },
+        Some(Subcommand::Covenant(command)) => {
+            command.run()?;
+        }
         #[cfg(target_os = "macos")]
         Some(Subcommand::App(app_cli)) => {
             app_cmd::run_app(app_cli).await?;
