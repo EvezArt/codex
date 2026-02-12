@@ -1,4 +1,4 @@
-import canonicalize from 'json-canonicalize';
+import { canonicalize } from 'json-canonicalize';
 
 /**
  * Creates a notification with canonical hash for audit trail

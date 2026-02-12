@@ -1,4 +1,4 @@
-import canonicalize from 'json-canonicalize';
+import { canonicalize } from 'json-canonicalize';
 
 /**
  * Executes a workflow and returns canonical representation

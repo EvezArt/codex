@@ -1,4 +1,4 @@
-import canonicalize from 'json-canonicalize';
+import { canonicalize } from 'json-canonicalize';
 
 /**
  * Runs inference and returns canonical representation of request

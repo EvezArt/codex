@@ -1,4 +1,4 @@
-import canonicalize from 'json-canonicalize';
+import { canonicalize } from 'json-canonicalize';
 
 /**
  * Validates market data by computing a canonical hash

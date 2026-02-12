@@ -1,4 +1,4 @@
-import canonicalize from 'json-canonicalize';
+import { canonicalize } from 'json-canonicalize';
 
 /**
  * Processes a payment and returns canonical representation
