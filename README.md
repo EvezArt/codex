@@ -89,11 +89,61 @@ Ranked matches:
 3. Bluetooth headset reconnects on media start (score: 0.76)
 ```
 
+## Ops Stack
+
+This repository includes a comprehensive ops stack with canonical hashing support for data integrity testing. The ops-stack provides operational modules for market intelligence, notifications, automation, monetization, and AI engine management.
+
+### Quick Start with Ops Stack
+
+```shell
+# Install dependencies
+cd ops-stack
+pnpm install
+
+# Run golden hash tests
+pnpm test
+
+# Deploy (mock deployment with preflight checks)
+cd ..
+./deploy-ops-stack.sh
+```
+
+See [ops-stack/README.md](./ops-stack/README.md) for detailed documentation.
+
+## GitHub Codespaces
+
+This repository is optimized for GitHub Codespaces with a comprehensive devcontainer configuration that includes:
+
+- **Languages & Tooling**: Node.js (v22), Rust, Go, Python 3, Java 21, Docker
+- **Canonical Hashing Libraries**: json-canonicalize (npm), serde_jcs (Rust), webpki/jcs (Go), rfc8785 (Python), WebPKI/JCS (Java)
+- **Development Tools**: Language servers, formatters, linters for all supported languages
+
+### Opening in Codespaces
+
+1. Click the green **Code** button on GitHub
+2. Select **Codespaces** tab
+3. Click **Create codespace on main**
+4. Wait for the container to build (includes all language tooling)
+5. Start developing!
+
+### Running Tests in Codespaces
+
+```shell
+# Run ops-stack golden hash tests
+cd ops-stack
+pnpm test
+
+# Run deployment script
+cd ..
+./deploy-ops-stack.sh
+```
+
 ## Docs
 
 - [**Codex Documentation**](https://developers.openai.com/codex)
 - [**Contributing**](./docs/contributing.md)
 - [**Installing & building**](./docs/install.md)
 - [**Open source fund**](./docs/open-source-fund.md)
+- [**Ops Stack**](./ops-stack/README.md)
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
