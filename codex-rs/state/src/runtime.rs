@@ -1163,6 +1163,103 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn init_creates_covenant_audit_schema() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let tables = sqlx::query(
+            r#"
+SELECT name
+FROM sqlite_master
+WHERE type = 'table' AND name IN ('covenants', 'audit_actions')
+ORDER BY name
+            "#,
+        )
+        .fetch_all(runtime.pool.as_ref())
+        .await
+        .expect("query schema tables")
+        .iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<Vec<String>>();
+
+        assert_eq!(
+            tables,
+            vec!["audit_actions".to_string(), "covenants".to_string()]
+        );
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
+    async fn insert_audit_action_creates_linked_covenant_record() {
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)
+            .await
+            .expect("initialize runtime");
+
+        let action = crate::AuditAction {
+            timestamp: 1_735_000_001,
+            actor: "agent".to_string(),
+            action_type: "proposal.exec_command".to_string(),
+            scope: "proposal".to_string(),
+            covenant_version: "2026-02-01".to_string(),
+            event_id: Some("evt-1".to_string()),
+            intent_id: Some("intent-1".to_string()),
+        };
+        runtime
+            .insert_audit_action(&action)
+            .await
+            .expect("insert audit action");
+
+        let linked_rows = sqlx::query(
+            r#"
+SELECT
+    a.actor,
+    a.action_type,
+    a.scope,
+    a.covenant_version,
+    a.event_id,
+    a.intent_id,
+    c.version AS covenant_version_join,
+    c.created_at
+FROM audit_actions AS a
+INNER JOIN covenants AS c ON c.version = a.covenant_version
+            "#,
+        )
+        .fetch_all(runtime.pool.as_ref())
+        .await
+        .expect("query linked audit rows")
+        .iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("actor"),
+                row.get::<String, _>("action_type"),
+                row.get::<String, _>("scope"),
+                row.get::<String, _>("covenant_version"),
+                row.get::<Option<String>, _>("event_id"),
+                row.get::<Option<String>, _>("intent_id"),
+                row.get::<String, _>("covenant_version_join"),
+                row.get::<i64, _>("created_at"),
+            )
+        })
+        .collect::<Vec<_>>();
+
+        assert_eq!(linked_rows.len(), 1);
+        assert_eq!(linked_rows[0].0, "agent".to_string());
+        assert_eq!(linked_rows[0].1, "proposal.exec_command".to_string());
+        assert_eq!(linked_rows[0].2, "proposal".to_string());
+        assert_eq!(linked_rows[0].3, "2026-02-01".to_string());
+        assert_eq!(linked_rows[0].4, Some("evt-1".to_string()));
+        assert_eq!(linked_rows[0].5, Some("intent-1".to_string()));
+        assert_eq!(linked_rows[0].6, "2026-02-01".to_string());
+        assert!(linked_rows[0].7 > 0);
+
+        let _ = tokio::fs::remove_dir_all(codex_home).await;
+    }
+
+    #[tokio::test]
     async fn upsert_and_get_thread_memory() {
         let codex_home = unique_temp_dir();
         let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string(), None)

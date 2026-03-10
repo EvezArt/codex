@@ -67,3 +67,48 @@ async fn find_covenant_path(cwd: &Path) -> Option<PathBuf> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Covenant;
+    use super::CovenantAction;
+    use super::CovenantScope;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn covenant_enforcement_blocks_out_of_scope_actions() {
+        let covenant = Covenant {
+            version: "2026-02-01".to_string(),
+            scopes: vec![CovenantScope {
+                name: "proposal".to_string(),
+                capabilities: vec![
+                    CovenantAction::ProposalExecCommand
+                        .as_capability()
+                        .to_string(),
+                ],
+            }],
+        };
+
+        assert_eq!(
+            covenant.allows(
+                "proposal",
+                CovenantAction::ProposalExecCommand.as_capability()
+            ),
+            true
+        );
+        assert_eq!(
+            covenant.allows(
+                "proposal",
+                CovenantAction::InterventionExecApproval.as_capability()
+            ),
+            false
+        );
+        assert_eq!(
+            covenant.allows(
+                "intervention",
+                CovenantAction::InterventionExecApproval.as_capability()
+            ),
+            false
+        );
+    }
+}

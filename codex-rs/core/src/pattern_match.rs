@@ -47,7 +47,11 @@ pub fn rank_patterns(
     patterns: &[PatternDefinition],
     limit: usize,
 ) -> Vec<PatternMatchResult> {
-    let event_text = format!("{trigger} {invariant}", trigger = event.trigger, invariant = event.invariant);
+    let event_text = format!(
+        "{trigger} {invariant}",
+        trigger = event.trigger,
+        invariant = event.invariant
+    );
     let event_tf = term_frequencies(&tokenize(&event_text));
 
     let mut results: Vec<PatternMatchResult> = patterns
@@ -124,7 +128,11 @@ fn cosine_similarity_tf(left: &HashMap<String, f64>, right: &HashMap<String, f64
     }
 
     let left_norm = left.values().map(|value| value * value).sum::<f64>().sqrt();
-    let right_norm = right.values().map(|value| value * value).sum::<f64>().sqrt();
+    let right_norm = right
+        .values()
+        .map(|value| value * value)
+        .sum::<f64>()
+        .sqrt();
     if left_norm == 0.0 || right_norm == 0.0 {
         0.0
     } else {
@@ -225,8 +233,64 @@ mod tests {
         ];
 
         let results = rank_patterns(&event, &patterns, 2);
-        let ids: Vec<&str> = results.iter().map(|result| result.pattern_id.as_str()).collect();
+        let ids: Vec<&str> = results
+            .iter()
+            .map(|result| result.pattern_id.as_str())
+            .collect();
         assert_eq!(ids, vec!["pattern-a", "pattern-b"]);
+    }
+
+    #[test]
+    fn ranking_returns_rationale_and_descending_totals() {
+        let event = PatternMatchEvent {
+            trigger: "auth timeout".to_string(),
+            invariant: "session token expired".to_string(),
+            domain_signature: vec![0.8, 0.2],
+            tests: vec!["auth timeout integration test".to_string()],
+        };
+
+        let patterns = vec![
+            PatternDefinition {
+                id: "strong-match".to_string(),
+                trigger: "auth timeout".to_string(),
+                invariant: "session token expired".to_string(),
+                domain_signature: vec![0.9, 0.1],
+                evidence_refs: vec!["auth timeout integration test".to_string()],
+            },
+            PatternDefinition {
+                id: "weak-match".to_string(),
+                trigger: "render glitch".to_string(),
+                invariant: "css mismatch".to_string(),
+                domain_signature: vec![0.0, 1.0],
+                evidence_refs: vec!["ui snapshot".to_string()],
+            },
+        ];
+
+        let results = rank_patterns(&event, &patterns, 2);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].pattern_id, "strong-match".to_string());
+        assert_eq!(results[1].pattern_id, "weak-match".to_string());
+        assert!(results[0].total >= results[1].total);
+        assert_eq!(
+            results[0].rationale.contains("text="),
+            true,
+            "rationale includes text score"
+        );
+        assert_eq!(
+            results[0].rationale.contains("domain="),
+            true,
+            "rationale includes domain score"
+        );
+        assert_eq!(
+            results[0].rationale.contains("outcome_affinity="),
+            true,
+            "rationale includes outcome affinity"
+        );
+        assert_eq!(
+            results[0].rationale.contains("total="),
+            true,
+            "rationale includes total"
+        );
     }
 
     #[test]
