@@ -89,6 +89,32 @@ Ranked matches:
 3. Bluetooth headset reconnects on media start (score: 0.76)
 ```
 
+### Compute stats from stored records
+
+`patterns-stats` only uses fields present in the input records (intent/outcome/tests/evidence/model/timestamps).
+
+```shell
+handshakeos-e patterns-stats --records ./records.json
+```
+
+Example output:
+
+```text
+Sample size: 2
+Intent→outcome fidelity: 0.734
+Override-rate proxy: 0.500
+Recovery-time proxy (steps): 1.000
+Recovery-time proxy (seconds): 20.000
+Model hit-rate: 1.000
+Heuristics:
+- intentOutcomeFidelity uses lexical cosine + token Jaccard overlap between intent and outcome text
+- overrideRateProxy marks a row as override when overrideApplied=true or tests/evidence/outcome include override-like keywords
+- recoveryTimeProxySeconds uses recoveredAt-startedAt when both timestamps are present and ordered
+- recoveryTimeProxySteps counts test/evidence steps from first failure-like signal to first later success-like signal
+- modelHitRate compares model with expectedModel when provided, otherwise with success-bearing tests/evidence/outcome text
+- all metrics are computed only from the provided rows and their tests/evidence text
+```
+
 ## Docs
 
 - [**Codex Documentation**](https://developers.openai.com/codex)

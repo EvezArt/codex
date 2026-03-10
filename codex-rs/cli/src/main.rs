@@ -36,13 +36,15 @@ mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
 mod mcp_cmd;
+mod patterns_match;
 #[cfg(not(windows))]
 mod wsl_paths;
-mod patterns_match;
 
 use crate::mcp_cmd::McpCli;
 use crate::patterns_match::PatternsMatchCommand;
+use crate::patterns_match::PatternsStatsCommand;
 use crate::patterns_match::run_patterns_match;
+use crate::patterns_match::run_patterns_stats;
 
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -129,6 +131,10 @@ enum Subcommand {
     /// Rank stored patterns against an event.
     #[clap(name = "patterns-match")]
     PatternsMatch(PatternsMatchCommand),
+
+    /// Compute pattern stats from provided records.
+    #[clap(name = "patterns-stats")]
+    PatternsStats(PatternsStatsCommand),
 
     /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
     Resume(ResumeCommand),
@@ -769,6 +775,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::PatternsMatch(cmd)) => {
             run_patterns_match(cmd)?;
+        }
+        Some(Subcommand::PatternsStats(cmd)) => {
+            run_patterns_stats(cmd)?;
         }
         Some(Subcommand::ResponsesApiProxy(args)) => {
             tokio::task::spawn_blocking(move || codex_responses_api_proxy::run_main(args))
