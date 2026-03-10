@@ -65,6 +65,25 @@ jobs:
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
 
+  focused_sqlite_tests:
+    name: Focused SQLite/covenant tests
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@1.93
+      - name: focused tests
+        run: |
+          set -euo pipefail
+          cargo test -p codex-state init_creates_covenant_audit_schema
+          cargo test -p codex-state insert_audit_action_creates_linked_covenant_record
+          cargo test -p codex-core ranking_returns_rationale_and_descending_totals
+          cargo test -p codex-core covenant_enforcement_blocks_out_of_scope_actions
+
   cargo_shear:
     name: cargo shear
     runs-on: ubuntu-24.04
@@ -634,7 +653,7 @@ jobs:
   # --- Gatherer job that you mark as the ONLY required status -----------------
   results:
     name: CI results (required)
-    needs: [changed, general, cargo_shear, lint_build, tests]
+    needs: [changed, general, cargo_shear, focused_sqlite_tests, lint_build, tests]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -643,6 +662,7 @@ jobs:
         run: |
           echo "general: ${{ needs.general.result }}"
           echo "shear  : ${{ needs.cargo_shear.result }}"
+          echo "focused: ${{ needs.focused_sqlite_tests.result }}"
           echo "lint   : ${{ needs.lint_build.result }}"
           echo "tests  : ${{ needs.tests.result }}"
 
@@ -656,6 +676,7 @@ jobs:
           # Otherwise require the jobs to have succeeded
           [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
           [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
+          [[ '${{ needs.focused_sqlite_tests.result }}' == 'success' ]] || { echo 'focused_sqlite_tests failed'; exit 1; }
           [[ '${{ needs.lint_build.result }}' == 'success' ]] || { echo 'lint_build failed'; exit 1; }
           [[ '${{ needs.tests.result }}' == 'success' ]] || { echo 'tests failed'; exit 1; }
 
