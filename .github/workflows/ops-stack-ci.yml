@@ -15,6 +15,9 @@ on:
       - '.devcontainer/**'
       - 'deploy-ops-stack.sh'
 
+permissions:
+  contents: read
+
 jobs:
   golden-hash-tests-node:
     name: Golden Hash Tests (Node.js)

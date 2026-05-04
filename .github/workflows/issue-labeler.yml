@@ -6,6 +6,10 @@ on:
       - opened
       - labeled
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   gather-labels:
     name: Generate label suggestions
