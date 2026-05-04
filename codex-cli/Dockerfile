@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   man-db \
   procps \
   unzip \
+  util-linux \
   ripgrep \
   zsh \
   && rm -rf /var/lib/apt/lists/*
