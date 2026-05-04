@@ -106,6 +106,9 @@ pnpm test
 # Deploy (mock deployment with preflight checks)
 cd ..
 ./deploy-ops-stack.sh
+
+# Optionally verify a live deployment during smoke tests
+OPS_STACK_HEALTHCHECK_URL=https://ops-stack.example.com/health ./deploy-ops-stack.sh
 ```
 
 See [ops-stack/README.md](./ops-stack/README.md) for detailed documentation.

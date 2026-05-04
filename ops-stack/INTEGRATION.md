@@ -158,14 +158,18 @@ rustc rust_example.rs && ./rust_example
 ### Using the Deployment Script
 ```bash
 ./deploy-ops-stack.sh
+
+# Optional: validate a real health endpoint during smoke tests
+OPS_STACK_HEALTHCHECK_URL=https://ops-stack.example.com/health ./deploy-ops-stack.sh
 ```
 
 The script performs:
 1. Preflight checks (Node.js, pnpm, TypeScript)
 2. Dependency installation
-3. TypeScript build
+3. TypeScript build (fails fast if compilation fails)
 4. Golden hash tests
 5. Mock deployment steps
+6. Optional live smoke test when `OPS_STACK_HEALTHCHECK_URL` is set
 
 ### Manual Deployment
 ```bash

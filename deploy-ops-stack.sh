@@ -1,5 +1,5 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 echo "🚀 Ops Stack Deployment Script"
 echo "================================"
@@ -62,8 +62,12 @@ fi
 echo ""
 echo "🔨 Building TypeScript..."
 if [ -f "tsconfig.json" ]; then
-    pnpm build || print_info "Build step not required or failed (continuing)"
-    print_success "Build completed"
+    if pnpm build; then
+        print_success "Build completed"
+    else
+        print_error "Build failed"
+        exit 1
+    fi
 fi
 
 echo ""
@@ -84,8 +88,18 @@ sleep 1
 print_success "Staging deployment successful"
 
 print_info "Step 3: Running smoke tests..."
-sleep 1
-print_success "Smoke tests passed"
+if [ -n "${OPS_STACK_HEALTHCHECK_URL:-}" ]; then
+    if curl --fail --silent --show-error --max-time 10 "$OPS_STACK_HEALTHCHECK_URL" > /dev/null; then
+        print_success "Health check passed: $OPS_STACK_HEALTHCHECK_URL"
+    else
+        print_error "Health check failed: $OPS_STACK_HEALTHCHECK_URL"
+        exit 1
+    fi
+else
+    print_info "No OPS_STACK_HEALTHCHECK_URL configured; skipping live health check"
+    sleep 1
+    print_success "Mock smoke tests passed"
+fi
 
 print_info "Step 4: Mock deployment to production environment..."
 sleep 1
@@ -97,6 +111,6 @@ print_success "🎉 Deployment completed successfully!"
 echo ""
 print_info "Next steps:"
 echo "  - Monitor logs: ./scripts/monitor-logs.sh (if available)"
-echo "  - Run health checks: curl https://ops-stack.example.com/health"
+echo "  - Run health checks: curl \"\${OPS_STACK_HEALTHCHECK_URL:-https://ops-stack.example.com/health}\""
 echo "  - View metrics: https://ops-stack.example.com/metrics"
 echo ""
