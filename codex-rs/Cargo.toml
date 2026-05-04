@@ -28,6 +28,7 @@ members = [
     "lmstudio",
     "login",
     "mcp-server",
+    "intent-patterns",
     "network-proxy",
     "ollama",
     "process-hardening",
